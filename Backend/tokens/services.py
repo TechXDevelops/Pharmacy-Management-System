@@ -78,8 +78,10 @@ def assign_token(patient, pharmacy_id):
         is_active=True
     )
 
+    # auto finish expired tokens
     auto_complete_expired_tokens(pharmacy)
 
+    # prevent duplicate active token
     existing = Token.objects.filter(
         patient=patient,
         pharmacy=pharmacy,
@@ -94,15 +96,19 @@ def assign_token(patient, pharmacy_id):
 
     token_number = last.token_number + 1 if last else 1
 
-    free_counters = get_free_counters(pharmacy)
-    counter = free_counters[0] if free_counters else None
-
-    return Token.objects.create(
+    # 🔥 CREATE TOKEN WITHOUT COUNTER
+    token = Token.objects.create(
         token_number=token_number,
         patient=patient,
         pharmacy=pharmacy,
-        counter=counter
+        counter=None
     )
+
+    # 🔥 AFTER creation, assign waiting tokens FIFO
+    assign_waiting_tokens(pharmacy)
+
+    return token
+
 
 
 # -----------------------------
@@ -111,10 +117,11 @@ def assign_token(patient, pharmacy_id):
 def calculate_expected_time(token):
     now = timezone.now()
 
-    # If already at counter → now
+    # 🔥 RULE 1: already at counter → NOW
     if token.counter:
         return now
 
+    # active counters
     active_counters = Counter.objects.filter(
         pharmacy=token.pharmacy,
         is_active=True
@@ -122,23 +129,6 @@ def calculate_expected_time(token):
 
     if active_counters == 0:
         return None
-
-    # 🔥 remaining time of currently running billing
-    running_tokens = Token.objects.filter(
-        pharmacy=token.pharmacy,
-        completed=False,
-        counter__isnull=False
-    ).order_by("created_at")
-
-    if running_tokens.exists():
-        first_running = running_tokens.first()
-        billing_end = first_running.created_at + timedelta(seconds=BILLING_TIME_SEC)
-        remaining = max(
-            timedelta(0),
-            billing_end - now
-        )
-    else:
-        remaining = timedelta(0)
 
     # 🔥 count waiting tokens ahead of me
     waiting_ahead = Token.objects.filter(
@@ -150,7 +140,7 @@ def calculate_expected_time(token):
 
     rounds = waiting_ahead // active_counters
 
-    return now + remaining + timedelta(seconds=rounds * BILLING_TIME_SEC)
+    return now + timedelta(seconds=(rounds + 1) * BILLING_TIME_SEC)
 
 
 # -----------------------------

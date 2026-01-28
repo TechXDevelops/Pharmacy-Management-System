@@ -28,6 +28,7 @@ def generate_token_api(request, pharmacy_id):
         return Response({"error": "Patient not found"}, status=404)
 
     token = assign_token(patient, pharmacy_id)
+    token.refresh_from_db()
 
     # 🔥 FIRST ESTIMATE AT GENERATION TIME
     generated_time = calculate_expected_time(token)
